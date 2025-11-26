@@ -66,14 +66,14 @@ const extractJson = (text: string): string => {
 };
 
 // Helper function to retry API calls on transient 500/503 errors
-const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+const withRetry = async <T>(operation: () => Promise<T>, retries = 2, delay = 1000): Promise<T> => {
     try {
         return await operation();
     } catch (error: any) {
         if (retries > 0) {
             const errorMsg = error.message || '';
             // Retry on Internal Error (500) or Service Unavailable (503) or Overloaded
-            if (errorMsg.includes('500') || errorMsg.includes('503') || errorMsg.includes('Internal error') || errorMsg.includes('overloaded')) {
+            if (errorMsg.includes('500') || errorMsg.includes('503') || errorMsg.includes('Internal error') || errorMsg.includes('overloaded') || errorMsg.includes('429')) {
                 const retryMsg = `Server busy, retrying in ${delay}ms... (${retries} left)`;
                 console.warn(retryMsg);
                 reportProgress(retryMsg);
@@ -103,10 +103,10 @@ const editImageInternal = async (
           
         const client = getAiClient();
 
-        // OPTIMIZATION: Resize input images if they are too large to prevent 500/503 errors
+        // OPTIMIZATION: Resize input images to 1024px (down from 1280px) to speed up processing
         reportProgress('Optimizing images...');
         const optimizedImages = await Promise.all(images.map(async (img) => {
-            const resized = await resizeBase64(img.base64Data, 1280);
+            const resized = await resizeBase64(img.base64Data, 1024);
             return { ...img, base64Data: resized };
         }));
 
@@ -186,9 +186,9 @@ export const generateFrontViewFromUploads = async (
         const client = getAiClient();
         
         reportProgress('Preparing images...');
-        // Convert files to inline data AND RESIZE them
+        // Convert files to inline data AND RESIZE them to 1024px
         const imageParts = await Promise.all(files.map(async (file) => {
-            const resizedBase64 = await resizeImageFile(file, 1280);
+            const resizedBase64 = await resizeImageFile(file, 1024);
             return {
                 inlineData: {
                     data: resizedBase64,
@@ -248,8 +248,8 @@ export const generateIsometricViews = async (
         const client = getAiClient();
         
         reportProgress('Resizing input...');
-        // Ensure input is resized
-        const resizedFront = await resizeBase64(frontViewBase64, 1280);
+        // Ensure input is resized to 1024px
+        const resizedFront = await resizeBase64(frontViewBase64, 1024);
         
         const inlineData = {
             data: resizedFront,
@@ -288,7 +288,7 @@ export const generateBlueprintStyle = async (
 ): Promise<string> => {
     return withRetry(async () => {
         const client = getAiClient();
-        const resized = await resizeBase64(imageBase64, 1280);
+        const resized = await resizeBase64(imageBase64, 1024);
         const inlineData = { data: resized, mimeType: 'image/png' };
 
         const prompt = `
@@ -392,8 +392,8 @@ const generateSingleSketchEdit = async (
         const client = getAiClient();
         
         reportProgress('Optimizing sketch inputs...');
-        const resizedBase = await resizeBase64(imageBase64, 1280);
-        const resizedSketch = await resizeBase64(sketchBase64, 1280);
+        const resizedBase = await resizeBase64(imageBase64, 1024);
+        const resizedSketch = await resizeBase64(sketchBase64, 1024);
 
         const promptText = `
         You are an expert 3D Product Designer and Visualizer.
@@ -967,12 +967,17 @@ export async function* generateImageEdits(
     const prompts: string[] = Array.isArray(plan.imagePrompts) ? plan.imagePrompts : [userPrompt, userPrompt, userPrompt];
     while (prompts.length < 3) prompts.push(userPrompt);
     
-    const generationPromises = prompts.slice(0, 3).map(async (prompt, index) => {
+    // MODIFIED: SEQUENTIAL GENERATION TO PREVENT TIMEOUTS
+    // Instead of launching all promises at once, we await them one by one.
+    for (let i = 0; i < 3; i++) {
+        const prompt = prompts[i];
+        yield { status: 'progress', message: `Generating variation ${i + 1} of 3...` };
+        
         try {
             const imageBase64 = await editImageInternal(images, prompt);
             const variation: ImageVariation = {
-                id: `var-${Date.now()}-${index}`,
-                title: `Variation ${index + 1}`,
+                id: `var-${Date.now()}-${i}`,
+                title: `Variation ${i + 1}`,
                 description: prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt,
                 imageUrl: `data:image/png;base64,${imageBase64}`,
                 createdAt: new Date(),
@@ -981,11 +986,11 @@ export async function* generateImageEdits(
                     prompt: prompt
                 }
             };
-            return variation;
+            yield variation;
         } catch (err) {
              const errorVariation: ImageVariation = {
-                id: `err-${Date.now()}-${index}`,
-                title: `Error ${index + 1}`,
+                id: `err-${Date.now()}-${i}`,
+                title: `Error ${i + 1}`,
                 description: "Generation failed",
                 imageUrl: "", 
                 createdAt: new Date(),
@@ -996,11 +1001,7 @@ export async function* generateImageEdits(
                     prompt: prompt
                 }
             };
-            return errorVariation;
+            yield errorVariation;
         }
-    });
-
-    for (const p of generationPromises) {
-        yield await p;
     }
 }
