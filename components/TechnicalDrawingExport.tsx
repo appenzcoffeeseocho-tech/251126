@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 
@@ -131,38 +130,38 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
             <div className="flex flex-1 overflow-hidden">
                 {/* 🎨 좌측: 히스토리 */}
                 <div className="w-28 bg-black/60 backdrop-blur-xl overflow-y-auto border-r border-white/10 p-2">
-    <h4 className="text-white font-semibold mb-3 text-xs uppercase tracking-wider opacity-60">
-        히스토리
-    </h4>
-    {imageHistory && imageHistory.length > 0 ? (
-        <div className="flex flex-col gap-2">
-            {imageHistory.map((item, idx) => (
-                <div
-                    key={item.id || idx}
-                    onClick={() => onHistoryClick?.(item)}
-                    className="group cursor-pointer rounded-lg overflow-hidden
-                               bg-white/5 hover:bg-white/10 transition-all duration-300
-                               border border-white/10 hover:border-white/20
-                               hover:scale-105"
-                >
-                    <img 
-                        src={item.imageUrl} 
-                        alt={item.title || `이미지 ${idx + 1}`}
-                        className="w-full h-auto"
-                    />
-                    <div className="p-1">
-                        <span className="block text-[10px] text-gray-400 group-hover:text-white 
-                                       truncate transition-colors">
-                            {item.title || `이미지 ${idx + 1}`}
-                        </span>
-                    </div>
+                    <h4 className="text-white font-semibold mb-3 text-xs uppercase tracking-wider opacity-60">
+                        히스토리
+                    </h4>
+                    {imageHistory && imageHistory.length > 0 ? (
+                        <div className="flex flex-col gap-2">
+                            {[...imageHistory].reverse().map((item, idx) => (
+                                <div
+                                    key={item.id || `history-${idx}`}
+                                    onClick={() => onHistoryClick?.(item)}
+                                    className="group cursor-pointer rounded-lg overflow-hidden
+                                               bg-white/5 hover:bg-white/10 transition-all duration-300
+                                               border border-white/10 hover:border-white/20
+                                               hover:scale-105"
+                                >
+                                    <img 
+                                        src={item.imageUrl} 
+                                        alt={item.title || `이미지 ${imageHistory.length - idx}`}
+                                        className="w-full h-auto"
+                                    />
+                                    <div className="p-1">
+                                        <span className="block text-[10px] text-gray-400 group-hover:text-white 
+                                                       truncate transition-colors">
+                                            {item.title || `이미지 ${imageHistory.length - idx}`}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-gray-500 text-xs text-center mt-4">히스토리 없음</p>
+                    )}
                 </div>
-            ))}
-        </div>
-    ) : (
-        <p className="text-gray-500 text-xs text-center mt-4">히스토리 없음</p>
-    )}
-</div>
 
                 {/* 🎨 중앙: 도면 미리보기 */}
                 <div className="flex-1 overflow-auto p-8 flex justify-center items-start bg-gradient-to-br from-black via-[#0A0A0B] to-black">
@@ -327,7 +326,7 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
                             </div>
                             <div style={{ width: '1954px', display: 'flex', flexDirection: 'column', justifyContent: 'center', paddingLeft: '20px', paddingRight: '20px', backgroundColor: '#fafafa', boxSizing: 'border-box', flexShrink: 0 }}>
                                 <span style={{ fontSize: '14px', color: '#374151', lineHeight: '1.6' }}>{tempMetadata.notes}</span>
-                                <span style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px', fontWeight: '600' }}>TOLERANCE ±2MM</span>
+                                <span style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px', fontWeight: '600' }}>TOLERANCE 넬2MM</span>
                             </div>
                         </div>
 
@@ -384,13 +383,15 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
                             </div>
                             {/* Right Column: Views */}
                             <div style={{ width: '690px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', flexShrink: 0 }}>
+                                {/* 🔥 FRONT VIEW: 흐백 필터 추가 */}
                                 <div style={{ height: '50%', borderBottom: '2px solid #374151', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', position: 'relative', backgroundColor: '#fafafa', boxSizing: 'border-box' }}>
                                     <div style={{ position: 'absolute', top: '20px', left: '30px', fontSize: '14px', fontWeight: 'bold', color: '#6b7280', letterSpacing: '1px' }}>FRONT VIEW</div>
-                                    <img src={`data:image/png;base64,${frontView}`} alt="Front view" style={{ maxWidth: '90%', maxHeight: '85%', objectFit: 'contain' }} />
+                                    <img src={`data:image/png;base64,${frontView}`} alt="Front view" style={{ maxWidth: '90%', maxHeight: '85%', objectFit: 'contain', filter: 'grayscale(100%)' }} />
                                 </div>
+                                {/* 🔥 SIDE VIEW: 흐백 필터 추가 */}
                                 <div style={{ height: '50%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', position: 'relative', backgroundColor: '#fafafa', boxSizing: 'border-box' }}>
                                     <div style={{ position: 'absolute', top: '20px', left: '30px', fontSize: '14px', fontWeight: 'bold', color: '#6b7280', letterSpacing: '1px' }}>SIDE VIEW</div>
-                                    <img src={`data:image/png;base64,${sideView}`} alt="Side view" style={{ maxWidth: '90%', maxHeight: '85%', objectFit: 'contain' }} />
+                                    <img src={`data:image/png;base64,${sideView}`} alt="Side view" style={{ maxWidth: '90%', maxHeight: '85%', objectFit: 'contain', filter: 'grayscale(100%)' }} />
                                 </div>
                             </div>
                         </div>
