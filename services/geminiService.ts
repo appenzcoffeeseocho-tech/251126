@@ -710,6 +710,10 @@ Note how 'table' (parent) box fully contains both children's boxes.` }
 export const generate3DIsometric = async (editedImageBase64: string): Promise<string> => {
     const client = getAiClient();
     
+    // OPTIMIZATION: Resize input image to 1024px to speed up processing
+    reportProgress('Optimizing input for 3D generation...');
+    const resizedBase64 = await resizeBase64(editedImageBase64, 1024);
+
     const prompt = `A highly detailed photorealistic isometric 3D render of the furniture. 
 The view is an elevated corner perspective (30-degree isometric angle), showing all materials, textures, wood grain, and metal details sharply defined with professional studio lighting. 
 
@@ -729,7 +733,7 @@ High-resolution output suitable for technical documentation.`;
                 model: 'gemini-3-pro-image-preview',
                 contents: {
                     parts: [
-                        { inlineData: { data: editedImageBase64, mimeType: 'image/png' } },
+                        { inlineData: { data: resizedBase64, mimeType: 'image/png' } },
                         { text: prompt }
                     ]
                 },
@@ -786,6 +790,10 @@ export const generateOrthographicViews = async (
 ): Promise<{front: string, side: string}> => {
     const client = getAiClient();
     
+    // OPTIMIZATION: Resize input image to 1024px to speed up processing
+    reportProgress('Optimizing input for orthographic views...');
+    const resizedBase64 = await resizeBase64(editedImageBase64, 1024);
+
     // Step 1: Generate FRONT view first
     const frontPrompt = `Create a precise FRONT ORTHOGRAPHIC technical line drawing of this furniture. 
 
@@ -808,7 +816,7 @@ OUTPUT: Front-facing orthographic view.`;
                 model: 'gemini-3-pro-image-preview',
                 contents: { 
                     parts: [
-                        { inlineData: { data: editedImageBase64, mimeType: 'image/png' } },
+                        { inlineData: { data: resizedBase64, mimeType: 'image/png' } },
                         { text: frontPrompt }
                     ]
                 },
@@ -848,7 +856,7 @@ OUTPUT: Side-facing orthographic view showing depth.`;
                 model: 'gemini-3-pro-image-preview',
                 contents: { 
                     parts: [
-                        { inlineData: { data: editedImageBase64, mimeType: 'image/png' } },
+                        { inlineData: { data: resizedBase64, mimeType: 'image/png' } },
                         { text: sidePrompt }
                     ]
                 },

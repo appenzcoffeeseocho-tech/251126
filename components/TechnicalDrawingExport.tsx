@@ -47,6 +47,22 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
     const [fitToScreen, setFitToScreen] = useState(true);
     const [tempMetadata, setTempMetadata] = useState(metadata);
 
+    // Calculate transform for dimensions to match the isometric image placement within the SVG
+    // The dimensions were drawn on a 1974x1711 canvas in EditorView.
+    // In this SVG, the image is placed in a rect of 554.2x470.7 at (20.5, 124.8).
+    const sourceWidth = 1974;
+    const sourceHeight = 1711;
+    const targetRect = { x: 20.5, y: 124.8, w: 554.2, h: 470.7 };
+    
+    // Calculate "meet" aspect ratio logic used by SVG preserveAspectRatio
+    const imgScale = Math.min(targetRect.w / sourceWidth, targetRect.h / sourceHeight);
+    const scaledWidth = sourceWidth * imgScale;
+    const scaledHeight = sourceHeight * imgScale;
+    
+    // Center the image in the target rect (xMidYMid)
+    const offsetX = targetRect.x + (targetRect.w - scaledWidth) / 2;
+    const offsetY = targetRect.y + (targetRect.h - scaledHeight) / 2;
+
     const modeButtons = [
         { key: 'upload', label: '이미지업로드' },
         { key: 'object', label: '객체편집' },
@@ -195,6 +211,15 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
                                     .st8{fill:none;stroke:#000000;stroke-width:0.25;stroke-miterlimit:10;}
                                 `}
                             </style>
+                            <defs>
+                                <marker id="exportArrowStart" markerWidth="12" markerHeight="12" refX="0" refY="6" orient="auto">
+                                    <polygon points="12 0, 0 6, 12 12" fill="black" />
+                                </marker>
+                                <marker id="exportArrowEnd" markerWidth="12" markerHeight="12" refX="12" refY="6" orient="auto">
+                                    <polygon points="0 0, 12 6, 0 12" fill="black" />
+                                </marker>
+                            </defs>
+
                             <rect x="0.2" className="st0" width="594.9" height="841.9"/>
                             <rect x="135.1" y="21.3" className="st1" width="37.5" height="45.3"/>
                             <rect id="TEXT_x5F_NOTE" x="172.5" y="66.7" className="st1" width="407.4" height="45.2"/>
@@ -261,6 +286,59 @@ export const TechnicalDrawingExport: React.FC<TechnicalDrawingExportProps> = ({
                             <image href={isometricImage} x="20.5" y="124.8" width="554.2" height="470.7" preserveAspectRatio="xMidYMid meet" />
                             <image href={frontView} x="32.4" y="620.7" width="248.4" height="192.2" preserveAspectRatio="xMidYMid meet" />
                             <image href={sideView} x="314.5" y="620.7" width="248.1" height="192.2" preserveAspectRatio="xMidYMid meet" />
+
+                            {/* Dimensions Layer */}
+                            <g transform={`translate(${offsetX}, ${offsetY}) scale(${imgScale})`}>
+                                {dimensions.map((dim) => {
+                                    const dx = dim.x2 - dim.x1;
+                                    const dy = dim.y2 - dim.y1;
+                                    const len = Math.sqrt(dx * dx + dy * dy);
+                                    if (len === 0) return null;
+
+                                    const normalX = -dy / len;
+                                    const normalY = dx / len;
+                                    const dimX1 = dim.x1 + normalX * dim.offset;
+                                    const dimY1 = dim.y1 + normalY * dim.offset;
+                                    const dimX2 = dim.x2 + normalX * dim.offset;
+                                    const dimY2 = dim.y2 + normalY * dim.offset;
+
+                                    const extDirection = dim.offset >= 0 ? 1 : -1;
+                                    const extLen = 20;
+                                    const ext1X2 = dim.x1 + normalX * (Math.abs(dim.offset) + extLen) * extDirection;
+                                    const ext1Y2 = dim.y1 + normalY * (Math.abs(dim.offset) + extLen) * extDirection;
+                                    const ext2X2 = dim.x2 + normalX * (Math.abs(dim.offset) + extLen) * extDirection;
+                                    const ext2Y2 = dim.y2 + normalY * (Math.abs(dim.offset) + extLen) * extDirection;
+
+                                    const textX = (dimX1 + dimX2) / 2;
+                                    const textY = (dimY1 + dimY2) / 2;
+
+                                    return (
+                                        <g key={dim.id}>
+                                            {/* Extension lines */}
+                                            <line x1={dim.x1} y1={dim.y1} x2={ext1X2} y2={ext1Y2} stroke="black" strokeWidth="3" />
+                                            <line x1={dim.x2} y1={dim.y2} x2={ext2X2} y2={ext2Y2} stroke="black" strokeWidth="3" />
+                                            
+                                            {/* Dimension line */}
+                                            <line x1={dimX1} y1={dimY1} x2={dimX2} y2={dimY2} 
+                                                  stroke="black" strokeWidth="3" 
+                                                  markerStart="url(#exportArrowStart)" markerEnd="url(#exportArrowEnd)" />
+                                            
+                                            {/* Text Background */}
+                                            <rect
+                                                x={textX - dim.label.length * 12}
+                                                y={textY - 20}
+                                                width={dim.label.length * 24}
+                                                height={40}
+                                                fill="white"
+                                            />
+                                            {/* Text */}
+                                            <text x={textX} y={textY + 10} fill="black" fontSize="32" fontWeight="bold" textAnchor="middle">
+                                                {dim.label}
+                                            </text>
+                                        </g>
+                                    );
+                                })}
+                            </g>
 
                             {/* TITLE */}
                             <foreignObject x="172.5" y="21.3" width="216.5" height="45.2">
