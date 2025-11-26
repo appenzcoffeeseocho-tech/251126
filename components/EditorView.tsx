@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ImageVariation, ApiObject, DetectedObject, BoundingBox } from '../types';
-import { segmentObjectsInImage, editImageWithMask, generateRepositionPrompt, applyRepositionEdit, generateFrontViewFromUploads, generateIsometricViews, editImageWithSketch, generateBlueprintStyle, refineBlueprintDimensions, generate3DIsometric, generateOrthographicViews } from '../services/geminiService';
+import { segmentObjectsInImage, editImageWithMask, generateRepositionPrompt, applyRepositionEdit, generateFrontViewFromUploads, generateIsometricViews, editImageWithSketch, generateBlueprintStyle, refineBlueprintDimensions, generate3DIsometric, generateOrthographicViews, setProgressCallback } from '../services/geminiService';
 import { t } from '../i18n';
 import { ObjectLayer } from './ObjectLayer';
 import { ObjectLayerSkeleton } from './ObjectLayerSkeleton';
@@ -107,6 +107,7 @@ export const EditorView: React.FC<EditorViewProps> = ({ image: initialImage, upl
   
   const [generationStatus, setGenerationStatus] = useState<'idle' | 'generating' | 'analyzing'>('idle');
   const [loadingMessage, setLoadingMessage] = useState<string>('');
+  const [imageProgressMsg, setImageProgressMsg] = useState<string>('');
   const [variationsToSelect, setVariationsToSelect] = useState<ImageVariation[] | null>(null);
   const [isGeneratingOrtho, setIsGeneratingOrtho] = useState(false);
 
@@ -119,6 +120,11 @@ export const EditorView: React.FC<EditorViewProps> = ({ image: initialImage, upl
   const [blueprintTool, setBlueprintTool] = useState<'draw' | 'select'>('draw');
 
   const COLORS = ['#FF0000', '#000000', '#FFFFFF', '#0000FF', '#00FF00', '#FFFF00', '#FFA500', '#800080'];
+
+  useEffect(() => {
+    setProgressCallback((msg) => setImageProgressMsg(msg));
+    return () => setProgressCallback(null);
+  }, []);
 
   // MODE BUTTONS configuration
   const modeButtons = [
@@ -617,6 +623,9 @@ export const EditorView: React.FC<EditorViewProps> = ({ image: initialImage, upl
               <div className="bg-white p-6 rounded-lg text-center">
                   <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent mx-auto mb-2 rounded-full"></div>
                   <p className="text-blue-600 font-medium">스튜디오샷으로 변경중...</p>
+                  {imageProgressMsg && (
+                    <p className="text-blue-400 text-sm font-mono mt-3 animate-pulse">{imageProgressMsg}</p>
+                  )}
               </div>
           </div>
       );
@@ -634,6 +643,9 @@ export const EditorView: React.FC<EditorViewProps> = ({ image: initialImage, upl
                     <div className="animate-spin w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 mx-auto mb-6 rounded-full"></div>
                     <p className="text-white text-lg font-medium mb-2">{loadingMessage || '처리중...'}</p>
                     <p className="text-gray-400 text-sm">잠시만 기다려주세요...</p>
+                    {imageProgressMsg && (
+                      <p className="text-blue-400 text-sm font-mono mt-3 animate-pulse">{imageProgressMsg}</p>
+                    )}
                 </div>
             </div>
         )}

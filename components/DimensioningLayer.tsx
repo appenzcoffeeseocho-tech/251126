@@ -14,7 +14,7 @@ interface DimensioningLayerProps {
     width: number;
     height: number;
     isActive: boolean;
-    currentTool: 'draw';
+    currentTool: 'draw' | 'select';
     onDimensionsChange?: (dimensions: Dimension[]) => void;
     zoom?: number;
 }
