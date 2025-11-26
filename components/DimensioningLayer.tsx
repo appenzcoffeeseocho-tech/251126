@@ -91,11 +91,11 @@ export const DimensioningLayer: React.FC<DimensioningLayerProps> = ({
         const point = getScaledCoordinates(e);
         
         if (drawingState === 'idle') {
-            // 1번 클릭: 시작점
+            // 1번 클릭: 시작점 설정 및 second_point 상태로 전환
             setFirstPoint(point);
             setSecondPoint(null);
             setOffsetPoint(null);
-            setDrawingState('first_point');
+            setDrawingState('second_point'); // 🔥 수정: first_point → second_point
         } else if (drawingState === 'second_point') {
             // 2번 클릭: 끝점 확정
             setDrawingState('offset_point');
@@ -111,7 +111,8 @@ export const DimensioningLayer: React.FC<DimensioningLayerProps> = ({
         
         const current = getScaledCoordinates(e);
         
-        if (drawingState === 'first_point' && firstPoint) {
+        // 🔥 수정: first_point → second_point 상태에서 미리보기 표시
+        if (drawingState === 'second_point' && firstPoint) {
             let finalPoint = current;
             if (isShiftPressed) {
                 const dx = Math.abs(current.x - firstPoint.x);
@@ -258,8 +259,8 @@ export const DimensioningLayer: React.FC<DimensioningLayerProps> = ({
                     );
                 })}
 
-                {/* 미리보기 1: 시작점 → 끝점 (빨간색, 양쪽 화살표) */}
-                {(drawingState === 'first_point' || drawingState === 'second_point' || drawingState === 'offset_point' || drawingState === 'awaiting_label') && firstPoint && secondPoint && (
+                {/* 🔥 수정: second_point 상태에서도 미리보기 표시 */}
+                {(drawingState === 'second_point' || drawingState === 'offset_point' || drawingState === 'awaiting_label') && firstPoint && secondPoint && (
                     <line 
                         x1={firstPoint.x} y1={firstPoint.y} 
                         x2={secondPoint.x} y2={secondPoint.y} 
