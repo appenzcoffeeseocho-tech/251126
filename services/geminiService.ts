@@ -3,24 +3,35 @@ import { ImageVariation, ApiObject, BoundingBox } from "../types";
 import { getCurrentLanguage } from "../i18n";
 import { resizeBase64, resizeImageFile } from "../utils/imageUtils";
 
+// Progress callback type
+type ProgressCallback = (message: string) => void;
+let globalProgressCallback: ProgressCallback | null = null;
+
+export const setProgressCallback = (callback: ProgressCallback | null) => {
+    globalProgressCallback = callback;
+};
+
+const reportProgress = (message: string) => {
+    if (globalProgressCallback) {
+        globalProgressCallback(message);
+    }
+    console.log(`📊 ${message}`);
+};
+
 // Removed lazy initialization of AI client to ensure fresh key usage
 const getAiClient = (): GoogleGenAI => {
     if (!process.env.API_KEY) {
       throw new Error("API_KEY environment variable not set. Please configure it to use the AI features.");
     }
-    // Always create a new instance to pick up any dynamic key changes from the environment/dialog
     return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
-// Helper to extract a JSON object or array from a string that might contain extraneous text or markdown fences.
 const extractJson = (text: string): string => {
-    // First, try to find JSON within markdown fences (```json ... ```)
     const markdownMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
     if (markdownMatch && markdownMatch[1]) {
         return markdownMatch[1].trim();
     }
 
-    // If no markdown fence, find the first '{' or '[' and the last '}' or ']'
     const firstBracket = text.indexOf('[');
     const firstBrace = text.indexOf('{');
     
@@ -35,8 +46,6 @@ const extractJson = (text: string): string => {
     }
     
     if (start === -1) {
-        // If we found neither, the response is not valid JSON.
-        // It could be a conversational refusal from the model.
         throw new Error(`Could not find a valid JSON object or array in the response. Model returned: "${text}"`);
     }
 
@@ -52,25 +61,27 @@ const extractJson = (text: string): string => {
     return text.substring(start, end + 1);
 };
 
-// Helper function to retry API calls on transient 500/503 errors
+// Enhanced retry with progress reporting
 const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+    const maxRetries = retries;
     try {
+        reportProgress(`서버 요청 전송 중...`);
         return await operation();
     } catch (error: any) {
         if (retries > 0) {
             const errorMsg = error.message || '';
-            // Retry on Internal Error (500) or Service Unavailable (503) or Overloaded
             if (errorMsg.includes('500') || errorMsg.includes('503') || errorMsg.includes('Internal error') || errorMsg.includes('overloaded')) {
-                console.warn(`API call failed with ${errorMsg}. Retrying in ${delay}ms... (${retries} retries left)`);
+                const attemptNum = maxRetries - retries + 1;
+                reportProgress(`⚠️ 서버 오류 발생. 재시도 중... (${attemptNum}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
-                return withRetry(operation, retries - 1, delay * 2); // Exponential backoff
+                return withRetry(operation, retries - 1, delay * 2);
             }
         }
+        reportProgress(`❌ 요청 실패: ${error.message}`);
         throw error;
     }
 };
 
-// This is an internal helper function, not exported.
 const editImageInternal = async (
   images: { base64Data: string, mimeType: string }[],
   prompt: string,
@@ -78,7 +89,6 @@ const editImageInternal = async (
 ): Promise<string> => {
   return withRetry(async () => {
       try {
-        // Validate the prompt to prevent API errors from empty/invalid text parts.
         if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
           throw new Error("A valid, non-empty prompt is required for image editing.");
         }
@@ -88,34 +98,29 @@ const editImageInternal = async (
           
         const client = getAiClient();
 
-        // OPTIMIZATION: Resize input images if they are too large to prevent 500/503 errors
+        reportProgress('이미지 최적화 중... (640px로 리사이징)');
         const optimizedImages = await Promise.all(images.map(async (img) => {
-            const resized = await resizeBase64(img.base64Data, 1280);
+            const resized = await resizeBase64(img.base64Data, 640);
             return { ...img, base64Data: resized };
         }));
 
         const imageParts = optimizedImages.map(img => ({ inlineData: { data: img.base64Data, mimeType: img.mimeType } }));
-
-        // Order matters for inpainting: [Image, Mask, Prompt] is generally more robust
         const parts: any[] = [...imageParts];
         
         if (maskBase64) {
-          parts.push({
-            inlineData: { data: maskBase64, mimeType: 'image/png' }
-          });
+          parts.push({ inlineData: { data: maskBase64, mimeType: 'image/png' } });
         }
         
         parts.push({ text: prompt });
 
-        // Using the requested Pro model. Requires valid paid API key.
+        reportProgress('AI 모델에 요청 전송 중...');
         const response = await client.models.generateContent({
           model: 'gemini-3-pro-image-preview', 
           contents: { parts },
-          config: {
-            // responseModalities is generally not required for this model
-          },
+          config: {},
         });
 
+        reportProgress('AI 응답 처리 중...');
         if (!response.candidates || response.candidates.length === 0) {
           if (response.promptFeedback?.blockReason) {
             throw new Error(`Image generation was blocked. Reason: ${response.promptFeedback.blockReason}`);
@@ -141,6 +146,7 @@ const editImageInternal = async (
         }
 
         if (returnedImage) {
+          reportProgress('✅ 이미지 생성 완료');
           return returnedImage;
         }
 
@@ -167,18 +173,17 @@ export const generateFrontViewFromUploads = async (
     return withRetry(async () => {
         const client = getAiClient();
         
-        // Convert files to inline data AND RESIZE them
+        reportProgress(`업로드된 이미지 ${files.length}개 처리 중...`);
         const imageParts = await Promise.all(files.map(async (file) => {
-            const resizedBase64 = await resizeImageFile(file, 1280);
+            const resizedBase64 = await resizeImageFile(file, 640);
             return {
                 inlineData: {
                     data: resizedBase64,
-                    mimeType: 'image/png' // resized output is always PNG in our util
+                    mimeType: 'image/png'
                 }
             };
         }));
 
-        // USER PROVIDED SPECIFIC PROMPT
         const prompt = `
 OBJECTIVE: Create a photorealistic interior photo of the attached furniture (Hero Product from image_1.png), focusing on preserving its exact materials and colors in a clean environment.
 USER-DEFINED VARIABLES:
@@ -195,9 +200,9 @@ Lighting & compositing (텍스처 보존을 위한 핵심 조명 설정):
 [The scene is illuminated by soft, diffused, large-source neutral architectural lighting (simulating light from large North-facing windows or huge softboxes).Crucial: The lighting must not be overly bright or harsh. It should be gentle enough to define the tactile textures of the wood grain and metal pipes without washing out their colors or creating harsh specular highlights.
 Shadows beneath the legs should be soft and grounded, not sharp black. The overall color balance is perfectly neutral.]
 Hygiene:
-Avoid HDR, oversharpening, or any effect that alters the original material appearance. No blown-out highlights on the wood surface.
-        `;
+Avoid HDR, oversharpening, or any effect that alters the original material appearance. No blown-out highlights on the wood surface.`;
 
+        reportProgress('스튜디오 샷 생성 중...');
         const response = await client.models.generateContent({
             model: 'gemini-3-pro-image-preview',
             contents: {
@@ -205,7 +210,7 @@ Avoid HDR, oversharpening, or any effect that alters the original material appea
             },
             config: {
                 imageConfig: {
-                    aspectRatio: "1:1" // FORCE SQUARE RATIO
+                    aspectRatio: "1:1"
                 }
             }
         });
@@ -217,6 +222,7 @@ Avoid HDR, oversharpening, or any effect that alters the original material appea
             throw new Error("Failed to generate front view.");
         }
 
+        reportProgress('✅ 스튜디오 샷 생성 완료');
         return part.inlineData.data;
     });
 };
@@ -227,17 +233,15 @@ export const generateIsometricViews = async (
     return withRetry(async () => {
         const client = getAiClient();
         
-        // Ensure input is resized
-        const resizedFront = await resizeBase64(frontViewBase64, 1280);
+        reportProgress('이미지 리사이징 중...');
+        const resizedFront = await resizeBase64(frontViewBase64, 640);
         
-        const inlineData = {
-            data: resizedFront,
-            mimeType: 'image/png'
-        };
+        const inlineData = { data: resizedFront, mimeType: 'image/png' };
 
         const leftPrompt = `Based on this FRONT VIEW image, generate a LEFT ISOMETRIC VIEW. Maintain exact materials, lighting, and warehouse concrete environment.`;
         const rightPrompt = `Based on this FRONT VIEW image, generate a RIGHT ISOMETRIC VIEW. Maintain exact materials, lighting, and warehouse concrete environment.`;
 
+        reportProgress('좌/우 아이소메트릭 뷰 생성 중...');
         const [leftResp, rightResp] = await Promise.all([
             client.models.generateContent({
                 model: 'gemini-3-pro-image-preview',
@@ -256,17 +260,18 @@ export const generateIsometricViews = async (
 
         if (!leftImg || !rightImg) throw new Error("Failed to generate side views.");
 
+        reportProgress('✅ 아이소메트릭 뷰 생성 완료');
         return { left: leftImg, right: rightImg };
     });
 };
 
-// Converts the photorealistic image into a technical blueprint/line-drawing style
 export const generateBlueprintStyle = async (
     imageBase64: string
 ): Promise<string> => {
     return withRetry(async () => {
         const client = getAiClient();
-        const resized = await resizeBase64(imageBase64, 1280);
+        reportProgress('블루프린트 스타일 변환 중...');
+        const resized = await resizeBase64(imageBase64, 640);
         const inlineData = { data: resized, mimeType: 'image/png' };
 
         const prompt = `
@@ -288,13 +293,11 @@ export const generateBlueprintStyle = async (
         
         const img = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
         if (!img) throw new Error("Failed to generate blueprint style.");
+        reportProgress('✅ 블루프린트 변환 완료');
         return img;
     });
 };
 
-/**
- * Refine user-drawn dimension arrows into professional CAD-style annotations
- */
 export const refineBlueprintDimensions = async (
     blueprintBase64: string,
     dimensionsData: {x1: number, y1: number, x2: number, y2: number, text: string}[]
@@ -332,9 +335,10 @@ OUTPUT: A refined blueprint image with CAD-quality dimension annotations while m
 `;
 
     try {
+        reportProgress('치수 주석 정제 중...');
         const response = await withRetry(async () => {
             return await client.models.generateContent({
-                model: 'gemini-3-pro-image-preview', // 이미지 생성 가능한 모델
+                model: 'gemini-3-pro-image-preview',
                 contents: {
                     parts: [
                         { inlineData: { data: blueprintBase64, mimeType: 'image/png' } },
@@ -350,7 +354,7 @@ OUTPUT: A refined blueprint image with CAD-quality dimension annotations while m
             throw new Error("AI failed to refine blueprint dimensions.");
         }
 
-        console.log("✅ Blueprint dimensions refined successfully");
+        reportProgress('✅ 치수 주석 정제 완료');
         return refinedImage;
     } catch (error) {
         console.error("❌ Blueprint refinement failed:", error);
@@ -358,7 +362,6 @@ OUTPUT: A refined blueprint image with CAD-quality dimension annotations while m
     }
 };
 
-// Internal helper to generate a single sketch variation
 const generateSingleSketchEdit = async (
     imageBase64: string,
     sketchBase64: string,
@@ -367,8 +370,9 @@ const generateSingleSketchEdit = async (
     return withRetry(async () => {
         const client = getAiClient();
         
-        const resizedBase = await resizeBase64(imageBase64, 1280);
-        const resizedSketch = await resizeBase64(sketchBase64, 1280);
+        reportProgress('스케치 + 이미지 병합 처리 중...');
+        const resizedBase = await resizeBase64(imageBase64, 640);
+        const resizedSketch = await resizeBase64(sketchBase64, 640);
 
         const promptText = `
         You are an expert 3D Product Designer and Visualizer.
@@ -389,11 +393,12 @@ const generateSingleSketchEdit = async (
         `;
 
         const parts = [
-            { inlineData: { data: resizedBase, mimeType: 'image/png' } }, // Source
-            { inlineData: { data: resizedSketch, mimeType: 'image/png' } }, // Sketch
+            { inlineData: { data: resizedBase, mimeType: 'image/png' } },
+            { inlineData: { data: resizedSketch, mimeType: 'image/png' } },
             { text: promptText }
         ];
 
+        reportProgress('스케치 기반 이미지 생성 중...');
         const response = await client.models.generateContent({
             model: 'gemini-3-pro-image-preview',
             contents: { parts },
@@ -401,19 +406,16 @@ const generateSingleSketchEdit = async (
 
         const img = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
         if (!img) throw new Error("Failed to generate sketch edit.");
+        reportProgress('✅ 스케치 편집 완료');
         return img;
     });
 };
 
-
-// Uses a user-drawn sketch + prompt to edit the image
-// Returns 3 variations -> UPDATED TO RETURN 1 VARIATION TO PREVENT TIMEOUT
 export const editImageWithSketch = async (
     imageBase64: string,
     sketchBase64: string,
     prompt: string
 ): Promise<string[]> => {
-    // 🔥 Validation Added
     if (!imageBase64 || !sketchBase64) {
         throw new Error("이미지 또는 스케치 데이터가 없습니다.");
     }
@@ -428,14 +430,10 @@ export const editImageWithSketch = async (
         promptLength: prompt.length
     });
 
-    // OPTIMIZATION: Generate only 1 variation to ensure stability and prevent timeouts
     const result = await generateSingleSketchEdit(imageBase64, cleanSketchBase64, prompt);
     
     return [result];
 };
-
-
-// ... (rest of existing functions like editImageWithMask, etc.)
 
 export const retryImageGeneration = async (
     images: { base64Data: string, mimeType: string }[],
@@ -458,7 +456,7 @@ export const editImageWithMask = async (
     
     const imageInput = [{ base64Data: imageBase64, mimeType: mimeType }];
     
-    // OPTIMIZATION: Generate only 1 variation to prevent timeouts
+    reportProgress('마스크 영역 편집 시작...');
     const result = await editImageInternal(imageInput, maskedPrompt, maskBase64);
     
     return [result];
@@ -469,7 +467,7 @@ export const generateRepositionPrompt = async (
     movedObjects: { label: string; originalBox: BoundingBox; newBox: BoundingBox }[]
 ): Promise<string> => {
     try {
-        // Perform detailed mathematical analysis of the movement
+        reportProgress(`객체 이동 분석 중... (${movedObjects.length}개 객체)`);
         const calculatedFacts = movedObjects.map(obj => {
             const oldW = obj.originalBox.xMax - obj.originalBox.xMin;
             const oldH = obj.originalBox.yMax - obj.originalBox.yMin;
@@ -481,10 +479,9 @@ export const generateRepositionPrompt = async (
             const newCenterX = (obj.newBox.xMin + obj.newBox.xMax) / 2;
             const newCenterY = (obj.newBox.yMin + obj.newBox.yMax) / 2;
 
-            // Movement logic (0-1000 scale)
             const dx = newCenterX - oldCenterX;
             const dy = newCenterY - oldCenterY;
-            const moveThreshold = 20; // 2% of screen
+            const moveThreshold = 20;
 
             let direction = "";
             if (Math.abs(dx) < moveThreshold && Math.abs(dy) < moveThreshold) {
@@ -495,7 +492,6 @@ export const generateRepositionPrompt = async (
                 direction = `moved ${vertical} ${horizontal}`.trim();
             }
 
-            // Scaling logic
             const widthRatio = newW / oldW;
             const heightRatio = newH / oldH;
             const areaRatio = (newW * newH) / (oldW * oldH);
@@ -507,7 +503,6 @@ export const generateRepositionPrompt = async (
                 scaling = "kept the same size";
                 structureInstruction = "Maintain the object's original proportions and design.";
             } else if (Math.abs(widthRatio - heightRatio) > 0.15) {
-                // Significant aspect ratio change (STRETCH)
                 if (widthRatio > heightRatio) {
                     scaling = `became WIDER/STRETCHED HORIZONTALLY (Width x${widthRatio.toFixed(2)})`;
                     structureInstruction = `STRUCTURAL EXTENSION REQUIRED: The object '${obj.label}' is being widened.
@@ -523,7 +518,6 @@ export const generateRepositionPrompt = async (
                     3. Do NOT duplicate distinct features vertically unless they form a stack.`;
                 }
             } else {
-                // Uniform scaling
                 if (areaRatio > 1.1) {
                     scaling = `grew LARGER (Scale x${Math.sqrt(areaRatio).toFixed(2)})`;
                     structureInstruction = "Scale the object up uniformly. Maintain high resolution and sharp details.";
@@ -541,7 +535,6 @@ export const generateRepositionPrompt = async (
 
     } catch (error) {
         console.error('Error generating reposition prompt:', error);
-        // Fallback to simple description
         return "Move the objects as requested.";
     }
 };
@@ -570,12 +563,11 @@ export const applyRepositionEdit = async (
 
     const imageInput = [{ base64Data: imageBase64, mimeType: mimeType }];
     
-    // OPTIMIZATION: Generate 1 variation
+    reportProgress('객체 재배치 적용 중...');
     const result = await editImageInternal(imageInput, finalPrompt, maskBase64);
     return [result];
 };
 
-// ... (segmentObjectsInImage remains unchanged)
 export const segmentObjectsInImage = async (
   imageBase64: string,
   mimeType: string,
@@ -583,8 +575,6 @@ export const segmentObjectsInImage = async (
   console.log("Starting object segmentation with JSON schema enforcement (no masks)...");
   try {
     const client = getAiClient();
-    // No need to resize here for flash model usually, but we could if detection fails.
-    // Keeping it raw for now as flash is robust.
     
     const objectSegmentationSchema = {
         type: Type.ARRAY,
@@ -605,6 +595,7 @@ export const segmentObjectsInImage = async (
         }
       };
 
+    reportProgress('객체 감지 시작...');
     const response = await client.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: {
@@ -651,7 +642,6 @@ Note how 'table' (parent) box fully contains both children's boxes.` }
 
     console.log("Raw JSON response from Gemini for segmentation:", response.text);
 
-    // FIX: Use extractJson instead of JSON.parse directly to handle potential markdown wrapping
     const jsonString = extractJson(response.text);
     const detectedObjects = JSON.parse(jsonString);
     
@@ -659,6 +649,7 @@ Note how 'table' (parent) box fully contains both children's boxes.` }
         throw new Error("API returned an invalid format for object segmentation.");
     }
     
+    reportProgress(`✅ 객체 ${detectedObjects.length}개 감지 완료`);
     return detectedObjects.map((obj:any) => ({
         ...obj,
         parentId: obj.parentId || null,
@@ -676,9 +667,6 @@ Note how 'table' (parent) box fully contains both children's boxes.` }
   }
 };
 
-/**
- * Generate 3D isometric view using Gemini's image transformation
- */
 export const generate3DIsometric = async (editedImageBase64: string): Promise<string> => {
     const client = getAiClient();
     
@@ -693,7 +681,7 @@ CRITICAL: The background must be PURE SOLID WHITE (Hex Code #FFFFFF).
 High-resolution output suitable for technical documentation.`;
 
     try {
-        console.log("🔄 Generating isometric view...");
+        reportProgress('3D 아이소메트릭 뷰 생성 중...');
         
         const response = await withRetry(async () => {
             return await client.models.generateContent({
@@ -712,9 +700,6 @@ High-resolution output suitable for technical documentation.`;
             });
         }, 3, 3000);
 
-        console.log("📊 API Response received");
-
-        // Extract image from response
         const candidate = response.candidates?.[0];
         if (!candidate) {
             throw new Error("No response candidate");
@@ -725,10 +710,8 @@ High-resolution output suitable for technical documentation.`;
             throw new Error("No content parts in response");
         }
 
-        // Find image data
         const imagePart = parts.find(p => p.inlineData?.mimeType?.startsWith('image'));
         if (!imagePart?.inlineData?.data) {
-            // Check if there's explanatory text
             const textPart = parts.find(p => p.text);
             const errorText = textPart?.text || "Unknown error";
             console.error("❌ Response:", errorText);
@@ -736,7 +719,7 @@ High-resolution output suitable for technical documentation.`;
         }
 
         const isoImage = imagePart.inlineData.data;
-        console.log("✅ Isometric view generated successfully");
+        reportProgress('✅ 3D 아이소메트릭 뷰 생성 완료');
         return isoImage;
 
     } catch (error) {
@@ -749,15 +732,11 @@ High-resolution output suitable for technical documentation.`;
     }
 };
 
-/**
- * Generate front and side orthographic views sequentially to ensure different angles
- */
 export const generateOrthographicViews = async (
     editedImageBase64: string
 ): Promise<{front: string, side: string}> => {
     const client = getAiClient();
     
-    // Step 1: Generate FRONT view first
     const frontPrompt = `Create a precise FRONT ORTHOGRAPHIC technical line drawing of this furniture. 
 
 CRITICAL REQUIREMENTS:
@@ -771,7 +750,7 @@ CRITICAL REQUIREMENTS:
 OUTPUT: Front-facing orthographic view.`;
 
     try {
-        console.log("🔄 Step 1: Generating FRONT view...");
+        reportProgress('정면도 생성 중... (1/2)');
 
         const frontResp = await withRetry<GenerateContentResponse>(() => client.models.generateContent({
             model: 'gemini-3-pro-image-preview',
@@ -790,9 +769,8 @@ OUTPUT: Front-facing orthographic view.`;
             throw new Error("Failed to generate front view");
         }
         
-        console.log("✅ Front view generated");
+        reportProgress('✅ 정면도 생성 완료');
 
-        // Step 2: Generate SIDE view (with explicit difference instruction)
         const sidePrompt = `Create a precise SIDE ORTHOGRAPHIC technical line drawing of this furniture.
 
 CRITICAL REQUIREMENTS:
@@ -808,7 +786,7 @@ IMPORTANT: This view must show the furniture's DEPTH and PROFILE, not the same a
 
 OUTPUT: Side-facing orthographic view showing depth.`;
 
-        console.log("🔄 Step 2: Generating SIDE view...");
+        reportProgress('측면도 생성 중... (2/2)');
 
         const sideResp = await withRetry<GenerateContentResponse>(() => client.models.generateContent({
             model: 'gemini-3-pro-image-preview',
@@ -818,7 +796,7 @@ OUTPUT: Side-facing orthographic view showing depth.`;
                     { text: sidePrompt }
                 ]
             },
-            config: { temperature: 0.4, topP: 0.85 } // Slightly higher randomness for variety
+            config: { temperature: 0.4, topP: 0.85 }
         }), 3, 3000);
 
         const sideImage = sideResp.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.mimeType?.startsWith('image'))?.inlineData?.data;
@@ -827,7 +805,7 @@ OUTPUT: Side-facing orthographic view showing depth.`;
             throw new Error("Failed to generate side view");
         }
 
-        console.log("✅ Side view generated (different angle)");
+        reportProgress('✅ 측면도 생성 완료');
         return { front: frontImage, side: sideImage };
 
     } catch (error) {
@@ -836,9 +814,6 @@ OUTPUT: Side-facing orthographic view showing depth.`;
     }
 };
 
-/**
- * Generates a multi-step response including a text plan and image variations.
- */
 export async function* generateImageEdits(
     images: { base64Data: string, mimeType: string }[],
     userPrompt: string,
